@@ -172,15 +172,6 @@ fn header(
     if screen != workspace.screen {
         workspace.set_screen(screen);
     }
-
-    let painter = ui.painter();
-    for x in [center_x, end_x] {
-        painter.rect_filled(
-            egui::Rect::from_center_size(egui::pos2(x, rect.center().y), vec2(1.0, 14.0)),
-            0.5,
-            theme::BORDER,
-        );
-    }
 }
 
 const SCREEN_TAB_WIDTH: f32 = 96.0;
@@ -1059,6 +1050,9 @@ pub(crate) fn draw(
             let style = theme::dock(ui.style());
             DockArea::new(dock)
                 .style(style)
+                .show_leaf_collapse_buttons(false)
+                .show_leaf_close_all_buttons(false)
+                .show_close_buttons(false)
                 .show_inside(ui, &mut viewer);
         });
     viewport.request_size(viewer.view_size, ctx.pixels_per_point());
