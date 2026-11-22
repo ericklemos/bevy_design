@@ -1,0 +1,235 @@
+use bevy::{
+    asset::RenderAssetUsages,
+    camera::RenderTarget,
+    light::NotShadowCaster,
+    prelude::*,
+    render::render_resource::{Extent3d, PrimitiveTopology, TextureFormat},
+};
+use bevy_egui::{
+    EguiGlobalSettings, EguiTextureHandle, EguiUserTextures, PrimaryEguiContext, egui,
+};
+use game::Health;
+
+use crate::{EditorOnly, ui::Workspace};
+
+#[derive(Component)]
+pub(crate) struct EditCamera;
+
+#[derive(Resource)]
+pub(crate) struct Viewport(pub(crate) Handle<Image>);
+
+impl Viewport {
+    pub(crate) fn resize(&self, images: &mut Assets<Image>, size: egui::Vec2, scale: f32) {
+        let width = (size.x * scale).round().clamp(1.0, 4096.0) as u32;
+        let height = (size.y * scale).round().clamp(1.0, 4096.0) as u32;
+        let Some(image) = images.get(&self.0) else {
+            return;
+        };
+        if image.width() != width || image.height() != height {
+            if let Some(mut image) = images.get_mut(&self.0) {
+                image.resize(Extent3d {
+                    width,
+                    height,
+                    depth_or_array_layers: 1,
+                });
+            }
+        }
+    }
+}
+
+#[derive(Resource)]
+pub(crate) struct FlyCamera {
+    pub(crate) transform: Transform,
+    yaw: f32,
+    pitch: f32,
+}
+
+impl Default for FlyCamera {
+    fn default() -> Self {
+        let transform = Transform::from_xyz(5.0, 4.0, 7.0).looking_at(Vec3::Y * 0.6, Vec3::Y);
+        let (yaw, pitch, _) = transform.rotation.to_euler(EulerRot::YXZ);
+        Self {
+            transform,
+            yaw,
+            pitch,
+        }
+    }
+}
+
+impl FlyCamera {
+    pub(crate) fn navigate(&mut self, response: &egui::Response, dt: f32) {
+        if response.dragged_by(egui::PointerButton::Secondary) {
+            let drag = response.drag_delta();
+            self.yaw -= drag.x * 0.005;
+            self.pitch = (self.pitch - drag.y * 0.005).clamp(-1.55, 1.55);
+            self.transform.rotation = Quat::from_euler(EulerRot::YXZ, self.yaw, self.pitch, 0.0);
+            let movement = response.ctx.input(|i| {
+                let axis = |positive, negative| {
+                    f32::from(i.key_down(positive)) - f32::from(i.key_down(negative))
+                };
+                Vec3::new(
+                    axis(egui::Key::D, egui::Key::A),
+                    axis(egui::Key::E, egui::Key::Q),
+                    axis(egui::Key::S, egui::Key::W),
+                )
+            });
+            self.transform.translation +=
+                self.transform.rotation * movement.normalize_or_zero() * dt * 7.0;
+        }
+        if response.hovered() {
+            let scroll = response.ctx.input(|i| i.smooth_scroll_delta.y);
+            self.transform.translation += self.transform.forward() * scroll * 0.015;
+        }
+    }
+}
+
+#[derive(Component)]
+pub(crate) struct PreviewCube;
+
+#[derive(Component)]
+pub(crate) struct PreviewGrid;
+
+fn grid_mesh() -> Mesh {
+    // Thin quads keep the grid in world space and correctly occluded by the preview mesh.
+    let mut positions = Vec::<[f32; 3]>::new();
+    let extent = 20.0;
+    for i in -19_i32..=19 {
+        let axis = i as f32;
+        let half_width = if i % 5 == 0 { 0.018 } else { 0.009 };
+        let (a, b) = (axis - half_width, axis + half_width);
+        for rotated in [false, true] {
+            let corners = if rotated {
+                [[-extent, a], [-extent, b], [extent, a], [extent, b]]
+            } else {
+                [[a, -extent], [a, extent], [b, -extent], [b, extent]]
+            };
+            for index in [0, 1, 2, 2, 1, 3] {
+                let [x, z] = corners[index];
+                positions.push([x, 0.004, z]);
+            }
+        }
+    }
+    Mesh::new(
+        PrimitiveTopology::TriangleList,
+        RenderAssetUsages::default(),
+    )
+    .with_inserted_attribute(
+        Mesh::ATTRIBUTE_NORMAL,
+        vec![[0.0, 1.0, 0.0]; positions.len()],
+    )
+    .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
+}
+
+pub(crate) fn setup(
+    mut commands: Commands,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut images: ResMut<Assets<Image>>,
+    mut textures: ResMut<EguiUserTextures>,
+    mut settings: ResMut<EguiGlobalSettings>,
+) {
+    settings.auto_create_primary_context = false;
+    let image = images.add(Image::new_target_texture(
+        960,
+        540,
+        TextureFormat::Bgra8UnormSrgb,
+        None,
+    ));
+    textures.add_image(EguiTextureHandle::Strong(image.clone()));
+
+    let camera = FlyCamera::default();
+    commands.spawn((Camera2d, PrimaryEguiContext, EditorOnly));
+    commands.spawn((
+        Camera3d::default(),
+        Camera {
+            order: -1,
+            clear_color: ClearColorConfig::Custom(Color::srgb(0.15, 0.14, 0.13)),
+            ..default()
+        },
+        RenderTarget::Image(image.clone().into()),
+        camera.transform,
+        EditCamera,
+        EditorOnly,
+    ));
+    commands.insert_resource(Viewport(image));
+    commands.insert_resource(camera);
+
+    commands.spawn((
+        Mesh3d(meshes.add(Cuboid::new(1.5, 1.5, 1.5))),
+        MeshMaterial3d(materials.add(Color::srgb(0.25, 0.55, 0.78))),
+        Transform::from_xyz(0.0, 0.75, 0.0),
+        Visibility::Hidden,
+        PreviewCube,
+        EditorOnly,
+    ));
+    commands.spawn((
+        Mesh3d(meshes.add(Plane3d::default().mesh().size(40.0, 40.0))),
+        MeshMaterial3d(materials.add(Color::srgb(0.13, 0.12, 0.11))),
+        EditorOnly,
+    ));
+    commands.spawn((
+        Mesh3d(meshes.add(grid_mesh())),
+        MeshMaterial3d(materials.add(Color::srgb(0.19, 0.175, 0.16))),
+        Transform::IDENTITY,
+        PreviewGrid,
+        NotShadowCaster,
+        EditorOnly,
+    ));
+    commands.spawn((
+        DirectionalLight {
+            illuminance: 10_000.0,
+            shadow_maps_enabled: true,
+            ..default()
+        },
+        Transform::from_xyz(3.0, 8.0, 5.0).looking_at(Vec3::ZERO, Vec3::Y),
+        EditorOnly,
+    ));
+}
+
+pub(crate) fn update_preview(
+    health: Query<(Entity, &Health, &GlobalTransform), Without<PreviewCube>>,
+    workspace: Res<Workspace>,
+    mut preview: Single<
+        (
+            &mut Visibility,
+            &mut GlobalTransform,
+            &MeshMaterial3d<StandardMaterial>,
+        ),
+        With<PreviewCube>,
+    >,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut grid: Single<&mut Visibility, (With<PreviewGrid>, Without<PreviewCube>)>,
+) {
+    let grid_visibility = if workspace.grid_visible {
+        Visibility::Visible
+    } else {
+        Visibility::Hidden
+    };
+    grid.set_if_neq(grid_visibility);
+    let (visibility, transform, material) = &mut *preview;
+    if let Ok((entity, health, global)) = health.single()
+        && workspace.preview_visible(entity)
+    {
+        **visibility = Visibility::Visible;
+        **transform = *global;
+        let health_fraction = if health.max > 0.0 {
+            (health.current / health.max).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        let color = Color::srgb(
+            0.64 - 0.39 * health_fraction,
+            0.27 + 0.28 * health_fraction,
+            0.36 + 0.42 * health_fraction,
+        );
+        if materials
+            .get(&material.0)
+            .is_some_and(|value| value.base_color != color)
+            && let Some(mut value) = materials.get_mut(&material.0)
+        {
+            value.base_color = color;
+        }
+    } else {
+        **visibility = Visibility::Hidden;
+    }
+}

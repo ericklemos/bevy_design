@@ -1,0 +1,5 @@
+(
+    velocidade: 150.0,
+    vida_maxima: 100.0,
+    gravidade: 9.8,
+)

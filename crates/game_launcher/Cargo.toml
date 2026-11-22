@@ -1,0 +1,9 @@
+[package]
+name = "game_launcher"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+bevy = { workspace = true, features = ["bevy_log", "bevy_world_serialization", "file_watcher"] }
+game.workspace = true

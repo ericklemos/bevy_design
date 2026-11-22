@@ -1,0 +1,19 @@
+[workspace]
+members = [
+    "crates/engine_runtime",
+    "crates/editor",
+    "crates/game",
+    "crates/game_launcher",
+]
+resolver = "3"
+
+[workspace.package]
+edition = "2024"
+rust-version = "1.97.1"
+
+[workspace.dependencies]
+bevy = { version = "=0.20.1", default-features = false, features = ["std", "async_executor"] }
+engine_runtime = { path = "crates/engine_runtime" }
+game = { path = "crates/game" }
+ron = "0.12"
+serde = { version = "1", features = ["derive"] }
