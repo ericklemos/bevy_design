@@ -1,0 +1,13 @@
+[package]
+name = "bevy_game"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.97.1"
+
+# Keep this game independent even when created inside another workspace.
+[workspace]
+
+[dependencies]
+bevy = { version = "=0.20.1", default-features = false, features = ["default_app", "3d_bevy_render", "bevy_world_serialization", "bevy_winit", "multi_threaded", "wayland", "x11"] }
+ron = "0.12"
+serde = { version = "1", features = ["derive"] }

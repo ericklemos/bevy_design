@@ -2,6 +2,7 @@ use bevy_egui::egui::{self, Color32, CornerRadius, FontId, Margin, Stroke, TextS
 
 pub(crate) const CANVAS: Color32 = Color32::from_rgb(0x18, 0x16, 0x15);
 pub(crate) const PANEL: Color32 = Color32::from_rgb(0x29, 0x26, 0x24);
+pub(crate) const ISLAND: Color32 = Color32::from_rgb(0x30, 0x2c, 0x29);
 pub(crate) const DEEP: Color32 = Color32::from_rgb(0x1f, 0x1d, 0x1b);
 pub(crate) const SURFACE: Color32 = Color32::from_rgb(0x35, 0x32, 0x2f);
 pub(crate) const INPUT: Color32 = Color32::from_rgb(0x3d, 0x39, 0x36);
@@ -20,10 +21,33 @@ pub(crate) const PANEL_RADIUS: u8 = 12;
 pub(crate) const CARD_RADIUS: u8 = 8;
 pub(crate) const CONTROL_RADIUS: u8 = 6;
 pub(crate) const PILL_RADIUS: u8 = u8::MAX;
-pub(crate) const GUTTER: i8 = 8;
+pub(crate) const GUTTER: i8 = 10;
 pub(crate) const PADDING: i8 = 10;
 pub(crate) const HEADER: f32 = 32.0;
+pub(crate) const TOOL_RAIL: f32 = 48.0;
+pub(crate) const STATUS_BAR: f32 = 26.0;
 pub(crate) const ROW: f32 = 24.0;
+
+pub(crate) const LIFT: egui::Shadow = egui::Shadow {
+    offset: [0, 6],
+    blur: 18,
+    spread: 0,
+    color: Color32::from_black_alpha(96),
+};
+pub(crate) const LIFT_SOFT: egui::Shadow = egui::Shadow {
+    offset: [0, 3],
+    blur: 10,
+    spread: 0,
+    color: Color32::from_black_alpha(72),
+};
+
+pub(crate) fn island(margin: Margin) -> egui::Frame {
+    egui::Frame::new()
+        .fill(ISLAND)
+        .corner_radius(PANEL_RADIUS)
+        .inner_margin(margin)
+        .shadow(LIFT_SOFT)
+}
 
 pub(crate) fn install(ctx: &egui::Context) {
     ctx.set_theme(egui::Theme::Dark);
@@ -54,7 +78,9 @@ pub(crate) fn install(ctx: &egui::Context) {
         visual.disabled_alpha = 0.45;
         visual.window_corner_radius = PANEL_RADIUS.into();
         visual.menu_corner_radius = CARD_RADIUS.into();
-        visual.window_stroke = Stroke::new(1.0, BORDER);
+        visual.window_stroke = Stroke::NONE;
+        visual.window_shadow = LIFT;
+        visual.popup_shadow = LIFT;
         visual.selection.bg_fill = SURFACE;
         visual.selection.stroke = Stroke::new(1.5, RUST);
 
@@ -68,12 +94,11 @@ pub(crate) fn install(ctx: &egui::Context) {
         ] {
             widget.bg_fill = fill;
             widget.weak_bg_fill = fill;
-            widget.bg_stroke = Stroke::new(1.0, BORDER);
+            widget.bg_stroke = Stroke::NONE;
             widget.fg_stroke = Stroke::new(1.5, text);
             widget.corner_radius = CONTROL_RADIUS.into();
             widget.expansion = 0.0;
         }
-        w.active.bg_stroke = Stroke::new(1.5, RUST);
         visual.override_text_color = Some(TEXT);
         style.visuals = visual;
     });
@@ -84,18 +109,20 @@ pub(crate) fn dock(style: &egui::Style) -> egui_dock::Style {
     dock.separator.width = f32::from(GUTTER);
     dock.separator.extra = 100.0;
     dock.separator.color_idle = CANVAS;
-    dock.separator.color_hovered = BORDER;
-    dock.separator.color_dragged = HOVER;
+    dock.separator.color_hovered = SURFACE;
+    dock.separator.color_dragged = RUST_SOFT;
     dock.main_surface_border_stroke = Stroke::NONE;
+    dock.main_surface_border_rounding = PANEL_RADIUS.into();
     dock.tab_bar.height = HEADER;
     dock.tab_bar.bg_fill = PANEL;
-    dock.tab_bar.hline_color = BORDER;
+    dock.tab_bar.hline_color = Color32::TRANSPARENT;
     dock.tab_bar.corner_radius = CornerRadius {
         nw: PANEL_RADIUS,
         ne: PANEL_RADIUS,
         ..CornerRadius::ZERO
     };
-    dock.tab_bar.inner_margin = Margin::symmetric(5, 2);
+    dock.tab_bar.inner_margin = Margin::symmetric(6, 4);
+    dock.tab.spacing = 2.0;
     dock.tab.tab_body.bg_fill = PANEL;
     dock.tab.tab_body.stroke = Stroke::NONE;
     dock.tab.tab_body.inner_margin = Margin::ZERO;
@@ -105,9 +132,9 @@ pub(crate) fn dock(style: &egui::Style) -> egui_dock::Style {
         ..CornerRadius::ZERO
     };
     for (tab, fill, color) in [
-        (&mut dock.tab.active, PANEL, TEXT),
-        (&mut dock.tab.focused, PANEL, TEXT),
-        (&mut dock.tab.inactive, PANEL, SECONDARY),
+        (&mut dock.tab.active, ISLAND, TEXT),
+        (&mut dock.tab.focused, ISLAND, TEXT),
+        (&mut dock.tab.inactive, Color32::TRANSPARENT, SECONDARY),
         (&mut dock.tab.hovered, HOVER, TEXT),
         (&mut dock.tab.active_with_kb_focus, SURFACE, TEXT),
         (&mut dock.tab.inactive_with_kb_focus, SURFACE, SECONDARY),
@@ -163,9 +190,9 @@ pub(crate) fn row(
         )
     });
     let fill = if response.hovered() {
-        HOVER
-    } else if selected {
         SURFACE
+    } else if selected {
+        ISLAND
     } else {
         Color32::TRANSPARENT
     };

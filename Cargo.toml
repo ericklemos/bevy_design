@@ -4,6 +4,7 @@ members = [
     "crates/editor",
     "crates/game",
     "crates/game_launcher",
+    "crates/projects",
 ]
 resolver = "3"
 
@@ -15,5 +16,6 @@ rust-version = "1.97.1"
 bevy = { version = "=0.20.1", default-features = false, features = ["std", "async_executor"] }
 engine_runtime = { path = "crates/engine_runtime" }
 game = { path = "crates/game" }
+projects = { path = "crates/projects" }
 ron = "0.12"
 serde = { version = "1", features = ["derive"] }

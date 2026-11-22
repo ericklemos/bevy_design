@@ -404,8 +404,7 @@ impl Inspector {
         for section in &self.sections {
             ui.push_id((entity, section.id), |ui| {
                 egui::Frame::new()
-                    .fill(theme::DEEP)
-                    .stroke(egui::Stroke::new(1.0, theme::BORDER))
+                    .fill(theme::ISLAND)
                     .corner_radius(theme::CARD_RADIUS)
                     .inner_margin(egui::Margin::symmetric(8, 4))
                     .show(ui, |ui| {

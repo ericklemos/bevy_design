@@ -1,4 +1,8 @@
-use bevy::{ecs::system::SystemParam, prelude::*, world_serialization::DynamicWorldRoot};
+use bevy::{
+    ecs::system::SystemParam,
+    prelude::*,
+    world_serialization::{DynamicWorldRoot, WorldInstance, WorldInstanceSpawner},
+};
 use bevy_egui::{EguiContexts, egui};
 use egui::{Color32, RichText, Ui, vec2};
 use egui_dock::{DockArea, DockState, NodeIndex, TabViewer};
@@ -12,12 +16,13 @@ use crate::{
     gizmo::{self, Gizmo},
     icons::{self, Icon},
     inspector::{Edit, Inspector},
+    project_picker::Picker,
     session::{self, Action, Mode, Session},
     theme::{self, CANVAS, RUST, SECONDARY, SURFACE, TEXT},
     viewport::{EditCamera, FlyCamera, Viewport},
 };
 
-#[derive(Clone, Copy, Debug, Hash)]
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
 enum Panel {
     Hierarchy,
     Viewport,
@@ -25,6 +30,30 @@ enum Panel {
     Inspector,
     Assets,
     Console,
+}
+
+impl Panel {
+    fn title(self) -> &'static str {
+        match self {
+            Self::Hierarchy => "Hierarchy",
+            Self::Viewport => "Viewport",
+            Self::Graph => "Flow Graph",
+            Self::Inspector => "Inspector",
+            Self::Assets => "Asset Browser",
+            Self::Console => "Console",
+        }
+    }
+
+    fn icon(self) -> Icon {
+        match self {
+            Self::Hierarchy => Icon::Tree,
+            Self::Viewport => Icon::View,
+            Self::Graph => Icon::Graph,
+            Self::Inspector => Icon::Inspector,
+            Self::Assets => Icon::Folder,
+            Self::Console => Icon::Terminal,
+        }
+    }
 }
 
 fn default_dock() -> DockState<Panel> {
@@ -40,6 +69,113 @@ fn default_dock() -> DockState<Panel> {
     tree.split_right(bottom, 0.57, vec![Panel::Console]);
     tree.split_below(left, TOP, vec![Panel::Assets]);
     dock
+}
+
+fn tool_is_active(dock: &DockState<Panel>, panel: Panel) -> bool {
+    dock.find_tab(&panel).is_some_and(|path| {
+        dock.leaf(path.node_path())
+            .is_ok_and(|leaf| leaf.active == path.tab)
+    })
+}
+
+fn toggle_tool(dock: &mut DockState<Panel>, panel: Panel) {
+    if let Some(path) = dock.find_tab(&panel) {
+        if tool_is_active(dock, panel) {
+            dock.remove_tab(path);
+        } else {
+            let _ = dock.set_active_tab(path);
+            dock.set_focused_node_and_surface(path.node_path());
+        }
+        return;
+    }
+
+    // Prefer the companion pane when it is still docked; don't reset the rest of the layout.
+    let companion = match panel {
+        Panel::Hierarchy => Some(Panel::Assets),
+        Panel::Assets => Some(Panel::Hierarchy),
+        Panel::Graph => Some(Panel::Console),
+        Panel::Console => Some(Panel::Graph),
+        Panel::Inspector => None,
+        Panel::Viewport => unreachable!("the viewport isn't on the toolbars"),
+    }
+    .and_then(|panel| dock.find_main_surface_tab(&panel).map(|(node, _)| node));
+    let viewport = dock
+        .find_main_surface_tab(&Panel::Viewport)
+        .map(|(node, _)| node);
+    let tree = dock.main_surface_mut();
+    let root = NodeIndex::root();
+    if tree.is_empty() {
+        tree.push_to_first_leaf(panel);
+        return;
+    }
+    let tabs = vec![panel];
+    match (panel, companion) {
+        (Panel::Hierarchy, Some(node)) => tree.split_above(node, 0.58, tabs),
+        (Panel::Assets, Some(node)) => tree.split_below(node, 0.58, tabs),
+        (Panel::Graph, Some(node)) => tree.split_left(node, 0.57, tabs),
+        (Panel::Console, Some(node)) => tree.split_right(node, 0.57, tabs),
+        (Panel::Hierarchy | Panel::Assets, None) => tree.split_left(root, 0.20, tabs),
+        (Panel::Inspector, _) => tree.split_right(root, 0.78, tabs),
+        (Panel::Graph | Panel::Console, None) => {
+            tree.split_below(viewport.unwrap_or(root), 0.58, tabs)
+        }
+        (Panel::Viewport, _) => unreachable!(),
+    };
+}
+
+fn tool_rail(
+    outer: &mut Ui,
+    edge: egui::Panel,
+    dock: &mut DockState<Panel>,
+    upper: &[Panel],
+    lower: &[Panel],
+) {
+    edge.resizable(false)
+        .exact_size(theme::TOOL_RAIL)
+        .frame(
+            egui::Frame::new()
+                .fill(theme::CANVAS)
+                .inner_margin(egui::Margin::symmetric(4, 8)),
+        )
+        .show(outer, |ui| {
+            let rect = ui.max_rect();
+            let top =
+                egui::Rect::from_min_size(rect.min, vec2(rect.width(), rail_group_height(upper)));
+            let height = rail_group_height(lower);
+            let bottom = egui::Rect::from_min_size(
+                egui::pos2(rect.left(), rect.bottom() - height),
+                vec2(rect.width(), height),
+            );
+            for (rect, panels) in [(top, upper), (bottom, lower)] {
+                ui.scope_builder(
+                    egui::UiBuilder::new()
+                        .max_rect(rect)
+                        .layout(egui::Layout::top_down(egui::Align::Center)),
+                    |ui| rail_group(ui, dock, panels),
+                );
+            }
+        });
+}
+
+fn rail_group_height(panels: &[Panel]) -> f32 {
+    let count = panels.len() as f32;
+    (count * 32.0 + (count - 1.0).max(0.0) * 2.0 + 8.0).max(0.0)
+}
+
+fn rail_group(ui: &mut Ui, dock: &mut DockState<Panel>, panels: &[Panel]) {
+    theme::island(egui::Margin::symmetric(4, 4)).show(ui, |ui| {
+        ui.spacing_mut().item_spacing.y = 2.0;
+        ui.vertical_centered(|ui| {
+            for &panel in panels {
+                let active = tool_is_active(dock, panel);
+                if icons::sized_button(ui, vec2(32.0, 32.0), panel.icon(), active, panel.title())
+                    .clicked()
+                {
+                    toggle_tool(dock, panel);
+                }
+            }
+        });
+    });
 }
 
 #[cfg(test)]
@@ -89,6 +225,80 @@ mod dock_tests {
             tree[center.right().right()].tabs(),
             Some([Panel::Console])
         ));
+    }
+
+    #[test]
+    fn sidebar_reopens_tools_without_replacing_the_remaining_layout() {
+        let mut dock = default_dock();
+        toggle_tool(&mut dock, Panel::Hierarchy);
+        assert!(dock.find_tab(&Panel::Hierarchy).is_none());
+        assert!(tool_is_active(&dock, Panel::Assets));
+
+        toggle_tool(&mut dock, Panel::Hierarchy);
+        let (hierarchy, _) = dock.find_main_surface_tab(&Panel::Hierarchy).unwrap();
+        let (assets, _) = dock.find_main_surface_tab(&Panel::Assets).unwrap();
+        assert_eq!(hierarchy, assets.parent().unwrap().left());
+        assert!(tool_is_active(&dock, Panel::Viewport));
+    }
+
+    #[test]
+    fn sidebar_activates_an_inactive_tab_before_hiding_it() {
+        let mut dock = DockState::new(vec![Panel::Graph, Panel::Console]);
+        assert!(!tool_is_active(&dock, Panel::Console));
+
+        toggle_tool(&mut dock, Panel::Console);
+        assert!(tool_is_active(&dock, Panel::Console));
+        assert!(dock.find_tab(&Panel::Graph).is_some());
+
+        toggle_tool(&mut dock, Panel::Console);
+        assert!(dock.find_tab(&Panel::Console).is_none());
+        assert!(tool_is_active(&dock, Panel::Graph));
+    }
+
+    #[test]
+    fn rail_buttons_are_usable_at_both_ends() {
+        let ctx = egui::Context::default();
+        icons::add_font(&ctx);
+        theme::install(&ctx);
+        let mut dock = default_dock();
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, vec2(640.0, 480.0));
+        let pass = |dock: &mut DockState<Panel>, events| {
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(screen),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    tool_rail(
+                        ui,
+                        egui::Panel::right("test_tools"),
+                        dock,
+                        &[Panel::Inspector],
+                        &[Panel::Graph, Panel::Console],
+                    );
+                },
+            );
+            output.textures_delta.clear();
+        };
+        for y in [22.0, 458.0, 418.0] {
+            let pos = egui::pos2(620.0, y);
+            pass(&mut dock, vec![egui::Event::PointerMoved(pos)]);
+            for pressed in [true, false] {
+                pass(
+                    &mut dock,
+                    vec![egui::Event::PointerButton {
+                        pos,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: egui::Modifiers::NONE,
+                    }],
+                );
+            }
+        }
+        assert!(dock.find_tab(&Panel::Inspector).is_none());
+        assert!(dock.find_tab(&Panel::Graph).is_none());
+        assert!(dock.find_tab(&Panel::Console).is_none());
     }
 }
 
@@ -197,7 +407,8 @@ impl Row {
 #[derive(SystemParam)]
 pub(crate) struct Tools<'w, 's> {
     inspector: Res<'w, Inspector>,
-    config: ResMut<'w, ConfigEditor>,
+    config: Option<ResMut<'w, ConfigEditor>>,
+    scene_spawner: Res<'w, WorldInstanceSpawner>,
     flow_graph: ResMut<'w, FlowGraph>,
     flow_model: Res<'w, Model>,
     asset_index: Res<'w, crate::asset_browser::Index>,
@@ -224,25 +435,31 @@ pub(crate) fn draw(
     mut contexts: EguiContexts,
     mut workspace: ResMut<Workspace>,
     session: Res<Session>,
-    roots: Query<Entity, With<DynamicWorldRoot>>,
+    roots: Query<(Entity, &WorldInstance), With<DynamicWorldRoot>>,
     children: Query<&Children>,
     nodes: SceneNodes,
-    viewport: Res<Viewport>,
-    mut images: ResMut<Assets<Image>>,
+    mut viewport: ResMut<Viewport>,
     mut fly: ResMut<FlyCamera>,
     mut camera: Single<(&Camera, &mut Transform), (With<EditCamera>, With<EditorOnly>)>,
     mut tools: Tools,
     mut commands: Commands,
     mut themed: Local<bool>,
+    mut projects: Local<Picker>,
 ) -> Result {
-    let root = session.restored_root.or_else(|| roots.single().ok());
+    let root = session.restored_root.or_else(|| {
+        let (entity, instance) = roots.single().ok()?;
+        tools
+            .scene_spawner
+            .instance_is_ready(**instance)
+            .then_some(entity)
+    });
     let rows: Vec<_> = root
         .and_then(|root| children.get(root).ok())
         .into_iter()
         .flat_map(Children::iter)
         .filter_map(|child| Row::read(child, &nodes))
         .collect();
-    let texture = contexts.image_id(&viewport.0);
+    let texture = contexts.image_id(&viewport.image);
     let ctx = contexts.ctx_mut()?;
     if !*themed {
         theme::install(ctx);
@@ -270,6 +487,9 @@ pub(crate) fn draw(
                         commands.write_message(AppExit::Success);
                     }
                 });
+                if ui.button("Procurar").clicked() {
+                    projects.choose(false);
+                }
                 ui.menu_button("Editors", |ui| {
                     if ui.button("Restaurar layout inicial").clicked() {
                         workspace.dock = default_dock();
@@ -282,6 +502,37 @@ pub(crate) fn draw(
                 });
             });
         });
+    egui::Panel::bottom("status")
+        .resizable(false)
+        .exact_size(theme::STATUS_BAR)
+        .frame(
+            egui::Frame::new()
+                .fill(theme::CANVAS)
+                .inner_margin(egui::Margin::symmetric(theme::GUTTER, 4)),
+        )
+        .show(&mut outer, |ui| {
+            egui::Frame::new()
+                .fill(theme::ISLAND)
+                .corner_radius(theme::PILL_RADIUS)
+                .inner_margin(egui::Margin::symmetric(10, 0))
+                .show(ui, |ui| {
+                    ui.set_min_size(vec2(ui.available_width(), 16.0));
+                });
+        });
+    tool_rail(
+        &mut outer,
+        egui::Panel::left("left_tools"),
+        &mut workspace.dock,
+        &[Panel::Hierarchy],
+        &[Panel::Assets],
+    );
+    tool_rail(
+        &mut outer,
+        egui::Panel::right("right_tools"),
+        &mut workspace.dock,
+        &[Panel::Inspector],
+        &[Panel::Graph, Panel::Console],
+    );
 
     let Workspace {
         dock,
@@ -323,7 +574,7 @@ pub(crate) fn draw(
         console,
         logs: &tools.logs,
         config_selected,
-        config: &mut tools.config,
+        config: tools.config.as_deref_mut(),
         flow_graph: &mut tools.flow_graph,
         flow_model: &tools.flow_model,
         inspector: &tools.inspector,
@@ -352,9 +603,7 @@ pub(crate) fn draw(
                 .style(style)
                 .show_inside(ui, &mut viewer);
         });
-    if let Some(size) = viewer.view_size {
-        viewport.resize(&mut images, size, ctx.pixels_per_point());
-    }
+    viewport.request_size(viewer.view_size, ctx.pixels_per_point());
     for edit in viewer.edits {
         commands.queue(move |world: &mut World| edit.apply(world));
     }
@@ -392,6 +641,7 @@ pub(crate) fn draw(
     if *camera.1 != fly.transform {
         *camera.1 = fly.transform;
     }
+    projects.window(ctx);
     Ok(())
 }
 
@@ -423,7 +673,7 @@ struct Viewer<'a> {
     console: &'a mut crate::console::View,
     logs: &'a crate::console::LogBuffer,
     config_selected: &'a mut bool,
-    config: &'a mut ConfigEditor,
+    config: Option<&'a mut ConfigEditor>,
     flow_graph: &'a mut FlowGraph,
     flow_model: &'a Model,
     inspector: &'a Inspector,
@@ -451,14 +701,7 @@ impl TabViewer for Viewer<'_> {
     fn title(&mut self, tab: &mut Panel) -> egui::WidgetText {
         let mut job = egui::text::LayoutJob::default();
         job.append(
-            match tab {
-                Panel::Hierarchy => "Hierarchy",
-                Panel::Viewport => "Viewport",
-                Panel::Graph => "Flow Graph",
-                Panel::Inspector => "Inspector",
-                Panel::Assets => "Asset Browser",
-                Panel::Console => "Console",
-            },
+            tab.title(),
             18.0,
             egui::TextFormat::simple(egui::FontId::proportional(12.0), TEXT),
         );
@@ -466,23 +709,19 @@ impl TabViewer for Viewer<'_> {
     }
 
     fn on_tab_button(&mut self, tab: &mut Panel, response: &egui::Response) {
-        let glyph = match tab {
-            Panel::Hierarchy => Icon::Tree,
-            Panel::Viewport => Icon::View,
-            Panel::Graph => Icon::Graph,
-            Panel::Inspector => Icon::Inspector,
-            Panel::Assets => Icon::Folder,
-            Panel::Console => Icon::Terminal,
-        };
         icons::paint(
             &response
                 .ctx
                 .layer_painter(response.layer_id)
                 .with_clip_rect(response.interact_rect),
             egui::pos2(response.rect.left() + 14.0, response.rect.center().y),
-            glyph,
+            tab.icon(),
             if response.hovered() { TEXT } else { SECONDARY },
         );
+    }
+
+    fn is_closeable(&self, tab: &Panel) -> bool {
+        *tab != Panel::Viewport
     }
 
     fn scroll_bars(&self, tab: &Panel) -> [bool; 2] {
@@ -563,14 +802,20 @@ impl Viewer<'_> {
                 let search = self.search.trim().to_lowercase();
                 self.hierarchy_rows(ui, self.rows, &search, 0);
                 if self.rows.is_empty() {
-                    ui.label(theme::label("Aguardando a cena…"));
+                    ui.label(theme::label(if self.root_present {
+                        "Nenhuma entidade na cena."
+                    } else {
+                        "Aguardando a cena…"
+                    }));
                 }
             }
             Panel::Viewport => unreachable!(),
             Panel::Graph => self.flow_graph.draw(ui, self.flow_model),
             Panel::Inspector => {
-                if *self.config_selected {
-                    self.config.draw(ui);
+                if *self.config_selected
+                    && let Some(config) = self.config.as_deref_mut()
+                {
+                    config.draw(ui);
                 } else if let Some(row) = self
                     .selected
                     .and_then(|id| self.rows.iter().find_map(|row| row.find(id)))
@@ -581,7 +826,7 @@ impl Viewer<'_> {
                             .monospace()
                             .color(SECONDARY),
                     );
-                    ui.separator();
+                    ui.add_space(8.0);
                     self.inspector.draw(
                         ui,
                         row.entity,
@@ -599,8 +844,8 @@ impl Viewer<'_> {
             }
             Panel::Assets => {
                 if let Some(path) = self.assets.draw(ui, self.asset_index) {
-                    *self.config_selected =
-                        path == std::path::Path::new("assets").join(game::PlayerConfig::PATH);
+                    *self.config_selected = self.config.is_some()
+                        && path == std::path::Path::new("assets").join(game::PlayerConfig::PATH);
                     *self.selected = None;
                 }
             }
@@ -626,12 +871,12 @@ impl Viewer<'_> {
                         ui.spacing_mut().item_spacing.x = 2.0;
                         ui.add_space((14.0 * depth as f32).min(ui.available_width() * 0.2));
                         if has_children && !filtering {
-                            if ui
-                                .add(
-                                    egui::Button::new(if collapsed { "›" } else { "⌄" })
-                                        .frame(false)
-                                        .min_size(vec2(14.0, theme::ROW)),
-                                )
+                            let (icon, label) = if collapsed {
+                                (Icon::Collapsed, "Expandir entidade")
+                            } else {
+                                (Icon::Expanded, "Recolher entidade")
+                            };
+                            if icons::sized_button(ui, vec2(14.0, theme::ROW), icon, false, label)
                                 .clicked()
                             {
                                 if collapsed {
@@ -671,13 +916,10 @@ impl Viewer<'_> {
                         }
                         if row.player {
                             let hidden = self.hierarchy.hidden.contains(&row.entity);
-                            if icon_action(
+                            if icons::sized_button(
                                 ui,
-                                if hidden {
-                                    RowIcon::EyeOff
-                                } else {
-                                    RowIcon::Eye
-                                },
+                                vec2(22.0, theme::ROW),
+                                if hidden { Icon::EyeOff } else { Icon::Eye },
                                 hidden,
                                 "Visibilidade da prévia",
                             )
@@ -691,7 +933,14 @@ impl Viewer<'_> {
                             }
                         }
                         let locked = self.hierarchy.locked.contains(&row.entity);
-                        if icon_action(ui, RowIcon::Lock, locked, "Bloquear edição").clicked() {
+                        let (icon, label) = if locked {
+                            (Icon::Lock, "Desbloquear edição")
+                        } else {
+                            (Icon::LockOpen, "Bloquear edição")
+                        };
+                        if icons::sized_button(ui, vec2(22.0, theme::ROW), icon, locked, label)
+                            .clicked()
+                        {
                             if locked {
                                 self.hierarchy.locked.remove(&row.entity);
                             } else {
@@ -724,11 +973,7 @@ impl Viewer<'_> {
         if size.x < 2.0 || size.y < 2.0 {
             return;
         }
-        let rounding = egui::CornerRadius {
-            sw: theme::PANEL_RADIUS,
-            se: theme::PANEL_RADIUS,
-            ..egui::CornerRadius::ZERO
-        };
+        let rounding = egui::CornerRadius::same(theme::PANEL_RADIUS);
         let response = if let Some(texture) = self.texture {
             self.view_size = Some(size);
             ui.add(
@@ -793,9 +1038,12 @@ impl Viewer<'_> {
                     if ui
                         .add_enabled(
                             !self.rows.is_empty() && self.session.mode != Mode::Play,
-                            egui::Button::new(RichText::new("▶ Play").strong().color(CANVAS))
-                                .frame(true)
-                                .corner_radius(theme::PILL_RADIUS),
+                            egui::Button::new((
+                                Icon::Play.text().color(CANVAS),
+                                RichText::new("Play").strong().color(CANVAS),
+                            ))
+                            .frame(true)
+                            .corner_radius(theme::PILL_RADIUS),
                         )
                         .clicked()
                     {
@@ -856,71 +1104,4 @@ fn pill(ui: &mut Ui, content: impl FnOnce(&mut Ui)) {
                 content(ui);
             });
         });
-}
-
-enum RowIcon {
-    Eye,
-    EyeOff,
-    Lock,
-}
-
-fn icon_action(ui: &mut Ui, icon: RowIcon, active: bool, tooltip: &str) -> egui::Response {
-    let (rect, response) = ui.allocate_exact_size(vec2(22.0, theme::ROW), egui::Sense::click());
-    response.widget_info(|| {
-        egui::WidgetInfo::selected(egui::WidgetType::Button, true, active, tooltip)
-    });
-    let c = rect.center();
-    let color = if response.hovered() || active {
-        TEXT
-    } else {
-        theme::MUTED
-    };
-    let stroke = egui::Stroke::new(1.5, color);
-    let p = ui.painter();
-    match icon {
-        RowIcon::Eye | RowIcon::EyeOff => {
-            p.add(egui::Shape::closed_line(
-                [
-                    (-6.0, 0.0),
-                    (-3.0, -3.5),
-                    (0.0, -4.5),
-                    (3.0, -3.5),
-                    (6.0, 0.0),
-                    (3.0, 3.5),
-                    (0.0, 4.5),
-                    (-3.0, 3.5),
-                ]
-                .map(|(x, y)| c + vec2(x, y))
-                .to_vec(),
-                stroke,
-            ));
-            p.circle_filled(c, 1.65, color);
-            if matches!(icon, RowIcon::EyeOff) {
-                p.line_segment([c + vec2(-6.0, 5.0), c + vec2(6.0, -5.0)], stroke);
-            }
-        }
-        RowIcon::Lock => {
-            p.rect_stroke(
-                egui::Rect::from_center_size(c + vec2(0.0, 2.0), vec2(9.0, 7.0)),
-                2,
-                stroke,
-                egui::StrokeKind::Inside,
-            );
-            let x = if active { 0.0 } else { -2.5 };
-            p.add(egui::Shape::line(
-                [
-                    (x - 2.5, -1.5),
-                    (x - 2.5, -4.0),
-                    (x - 1.0, -5.5),
-                    (x + 1.0, -5.5),
-                    (x + 2.5, -4.0),
-                    (x + 2.5, -1.5),
-                ]
-                .map(|(x, y)| c + vec2(x, y))
-                .to_vec(),
-                stroke,
-            ));
-        }
-    }
-    response.on_hover_text(tooltip)
 }

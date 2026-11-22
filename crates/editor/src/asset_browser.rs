@@ -92,7 +92,7 @@ impl Browser {
                     }
                 },
             );
-            ui.separator();
+            ui.add_space(8.0);
             ui.vertical(|ui| {
                 let files = index
                     .folders
@@ -142,23 +142,16 @@ fn card(ui: &mut egui::Ui, path: &Path, width: f32, selected: bool) -> egui::Res
     });
     let p = ui.painter();
     let preview = Rect::from_min_size(rect.min, vec2(width, 62.0));
-    p.rect(
+    p.rect_filled(
         preview,
         theme::CARD_RADIUS,
-        if response.hovered() || selected {
+        if response.hovered() {
             theme::HOVER
-        } else {
+        } else if selected {
             theme::SURFACE
+        } else {
+            theme::ISLAND
         },
-        Stroke::new(
-            1.0,
-            if selected {
-                theme::SECONDARY
-            } else {
-                theme::BORDER
-            },
-        ),
-        egui::StrokeKind::Inside,
     );
     let doc = Rect::from_center_size(preview.center() - vec2(0.0, 6.0), vec2(19.0, 24.0));
     let stroke = Stroke::new(1.5, theme::SECONDARY);
@@ -173,7 +166,12 @@ fn card(ui: &mut egui::Ui, path: &Path, width: f32, selected: bool) -> egui::Res
         FontId::monospace(9.0),
         theme::SECONDARY,
     );
-    let galley = egui::WidgetText::from(name.as_ref()).into_galley(
+    let galley = egui::WidgetText::from(egui::RichText::new(name.as_ref()).color(if selected {
+        theme::RUST_HOVER
+    } else {
+        theme::TEXT
+    }))
+    .into_galley(
         ui,
         Some(egui::TextWrapMode::Truncate),
         width,

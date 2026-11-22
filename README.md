@@ -1,21 +1,84 @@
 # Engine Visual Nativa para Bevy
 
-Editor nativo em **Bevy 0.20.1**. A partir da raiz do workspace:
+Editor nativo em **Bevy 0.20.1**.
+
+## Configuração do projeto
+
+Use **Rust 1.97.1** ou mais recente. No Debian/Ubuntu, instale as dependências
+de compilação do Wayland antes de executar o editor pela primeira vez:
+
+```sh
+sudo apt install pkg-config libwayland-dev libxkbcommon-dev
+```
+
+Em seguida, na raiz do projeto:
 
 ```sh
 cargo run -p editor
-cargo run -p game_launcher
-bash scripts/test-ejection.sh
 ```
+
+No Linux, o editor prefere **Wayland nativo** quando a sessão o disponibiliza,
+sem depender do XWayland. Sessões X11 continuam suportadas.
+
+Se a compilação indicar `Package wayland-client was not found`, confira se
+`libwayland-dev` está instalado: ele fornece o arquivo `wayland-client.pc`.
+Com a instalação pelo `apt`, não é necessário configurar `PKG_CONFIG_PATH`.
+
+## Projetos
+
+Na tela **Projetos**, use **Novo projeto**, informe o nome e clique em
+**Procurar** para escolher onde criar a pasta do projeto. O editor preenche
+o caminho com uma subpasta de mesmo nome. Você também pode digitar o caminho
+completo de uma pasta nova. **Abrir projeto** aceita uma pasta com
+`project.ron`. No editor, o botão **Procurar** abre o mesmo formulário; o próximo
+projeto abre em outra janela sem fechar a atual.
+
+A tela inicial mostra os últimos 20 projetos abertos, com busca por nome ou
+caminho. Clique no projeto para reabri-lo ou em **×** para removê-lo do histórico
+sem apagar arquivos. O histórico é local ao usuário: no Linux fica em
+`$XDG_DATA_HOME/bevy-editor/user.redb` (por padrão, `~/.local/share/bevy-editor/user.redb`).
+
+Também é possível criar e abrir pelo terminal:
+
+```sh
+cargo run -p editor -- new ../meu-jogo "Meu jogo"
+cargo run -p editor -- open ../meu-jogo
+cargo run -p editor -- open examples/demo
+```
+
+Cada projeto novo é um jogo Bevy independente: tem `Cargo.toml`, `src/main.rs`,
+`assets/`, uma cena vazia em `scenes/main.scn.ron` e `project.ron`. O manifesto
+guarda a versão, o nome e `startup_scene` (caminho relativo a `scenes/`). O layout
+do grafo fica em `.editor/` de cada projeto.
+
+Na pasta do jogo, use `cargo run` para abrir a janela do jogo e
+`cargo build --release` para compilar o executável. Para distribuir, coloque
+`target/release/bevy_game` (`bevy_game.exe` no Windows) junto com `project.ron`,
+`scenes/` e `assets/`. O jogo não depende do editor nem do workspace que o gerou.
+Projetos antigos continuam abrindo no editor, mas não ganham código Rust
+automaticamente.
+
+As alterações nas entidades feitas no editor ainda não são gravadas na cena.
+Comandos sem caminho usam a pasta atual se ela tiver um manifesto;
+`BEVY_ASSET_ROOT` também pode apontar para a pasta do projeto.
 
 ## Editor
 
 Os painéis podem ser movidos, redimensionados e reacoplados pelas abas.
 Em `Editors → Restaurar layout inicial` é possível voltar à disposição padrão.
-O tema Warm Charcoal usa três colunas: Hierarchy e Asset Browser à esquerda,
-Viewport sobre Flow Graph e Console no centro, e Inspector à direita.
+As barras laterais agrupam atalhos de ferramentas no topo e no rodapé. Clique
+num ícone para abrir a ferramenta ou ativar a sua aba; clique de novo para
+ocultá-la. A barra de status inferior está reservada para informações futuras.
+O tema Warm Charcoal usa cards flutuantes: os painéis são ilhas arredondadas
+separadas por respiros, com sombra leve em vez de linhas divisórias. As abas
+ativas aparecem como pílulas. O layout tem três colunas: Hierarchy e Asset
+Browser à esquerda, Viewport sobre Flow Graph e Console no centro, e Inspector
+à direita.
+O pacote oficial de ícones do editor é o **Material Symbols Outlined**, do Google.
+A fonte é embutida no binário e funciona offline. Para adicionar um ícone, siga
+as [instruções do pacote](crates/editor/assets/material-symbols/README.md).
 Na Viewport, arraste com o botão direito para olhar, use WASD/QE durante o arrasto
-para mover e a roda para aproximar ou afastar. O cubo é uma prévia 3D da entidade
+para mover e a roda para aproximar ou afastar. Na demo, o cubo é uma prévia 3D da entidade
 `Player`: segue seu `Transform` e responde, pela cor, à proporção de vida atual.
 
 - **Play:** captura o estado refletido da cena e inicia o gameplay (`120/120 → 90/100` na demo).
@@ -39,7 +102,7 @@ eixos globais; rotação e escala usam os eixos locais. O menu **Snap** alterna
 incrementos de 0,5 unidade, 15° e 0,1×, respectivamente. O menu de visualização
 permite ocultar a grade e redefinir a câmera.
 
-No **Asset Browser**, selecione `player_config.ron` para editar seus campos no Inspector,
+Na demo, use o **Asset Browser** para selecionar `player_config.ron` e editar seus campos no Inspector,
 inclusive durante **Play**. O editor salva após 350 ms sem alterações ou no botão
 **Salvar agora**. O watcher do Bevy recarrega o arquivo; mudar `vida_maxima` afeta
 a vida e a cor do cubo durante Play. Se o arquivo tiver sido alterado externamente
@@ -49,11 +112,11 @@ O navegador indexa `assets/` e `scenes/` na abertura do editor e exibe cartões
 de arquivo com sua extensão. Não gera miniaturas renderizadas de meshes ou materiais.
 O **Console** mantém até 500 registros da sessão atual, com busca, filtro por
 nível e controle de rolagem automática. A aba **Timeline** mostra as transições
-de simulação, não um perfil de desempenho. No Linux, o editor usa X11 ou XWayland.
+de simulação, não um perfil de desempenho.
 
 ## Grafo de fluxos — Fase 4
 
-O **Flow Graph** fica abaixo da **Viewport**. O grafo abre em
+O **Flow Graph** fica abaixo da **Viewport**. Na demo, o grafo abre em
 `Update` com o filtro `GamePlugin`. Troque o
 schedule e filtre por plugin ou `SystemSet`. Use a roda para dar zoom, arraste
 o fundo com o botão direito ou do meio para navegar e arraste os nós com o
@@ -76,19 +139,21 @@ O filtro de origem distingue `GamePlugin`, `EguiPlugin`, os sistemas do editor
 e `DefaultPlugins` como grupo. Registros fora desses pontos aparecem como
 origem não registrada.
 
-## Launcher e teste de ejeção
+## Launcher e demo
 
-O launcher da Fase 1 roda sem janela e encerra sozinho. Ele carrega `scenes/level.scn.ron`
-pela API nativa `DynamicWorld`/`DynamicWorldRoot`, lê `assets/configs/player_config.ron` pelo
-`AssetServer` e passa dano ao jogador via `EntityEvent` e `On<Damage>`. O resultado esperado
-é `Health: 90/100`: a cena começa com 120, a config limita a vida a 100 e o Observer
-subtrai 10. Se o resultado não aparecer em 5 segundos, o launcher retorna erro.
+O launcher do workspace é uma ferramenta de teste: carrega a cena declarada em
+`project.ron` e roda sem janela. Não é necessário para rodar ou distribuir os jogos
+novos. O gameplay da demo é habilitado em projetos com
+`assets/configs/player_config.ron`.
 
-O teste de ejeção executa o mesmo launcher numa cópia temporária sem `crates/editor/`,
-sem `.editor/` e sem o membro `editor` no manifesto. O workspace original não é alterado.
+```sh
+cargo run -p game_launcher -- ../meu-jogo
+cargo run -p game_launcher -- examples/demo --verify-demo
+```
 
-O `file_watcher` está habilitado, mas o smoke test valida somente o carregamento inicial,
-não o ciclo de edição/hot-reload.
+Com `--verify-demo`, o launcher espera até 5 segundos pelo resultado
+`Health: 90/100` e encerra sozinho. A verificação cobre o carregamento inicial,
+não a edição nem o hot reload.
 
 ## Linkagem dinâmica opcional
 

@@ -1,4 +1,4 @@
-use bevy::{prelude::*, world_serialization::DynamicWorldRoot};
+use bevy::prelude::*;
 use engine_runtime::RonAssetLoader;
 use serde::{Deserialize, Serialize};
 
@@ -18,7 +18,7 @@ impl Plugin for GamePlugin {
             .init_asset_loader::<RonAssetLoader<PlayerConfig>>()
             .init_resource::<GameSimulation>()
             .add_observer(apply_damage)
-            .add_systems(Startup, load_demo)
+            .add_systems(Startup, load_player_config)
             .add_systems(
                 Update,
                 (start_demo, refresh_player_limits)
@@ -78,11 +78,7 @@ struct Damage {
     amount: f32,
 }
 
-fn load_demo(mut commands: Commands, assets: Res<AssetServer>) {
-    commands.spawn((
-        DynamicWorldRoot(assets.load("scenes://level.scn.ron")),
-        Transform::IDENTITY,
-    ));
+fn load_player_config(mut commands: Commands, assets: Res<AssetServer>) {
     commands.insert_resource(ConfigHandle(assets.load(PlayerConfig::PATH)));
 }
 

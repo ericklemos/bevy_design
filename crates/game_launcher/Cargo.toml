@@ -7,3 +7,5 @@ rust-version.workspace = true
 [dependencies]
 bevy = { workspace = true, features = ["bevy_log", "bevy_world_serialization", "file_watcher"] }
 game.workspace = true
+engine_runtime.workspace = true
+projects.workspace = true

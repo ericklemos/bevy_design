@@ -62,11 +62,11 @@ pub(crate) struct FlowGraph {
 }
 
 impl FlowGraph {
-    pub(crate) fn new(path: PathBuf) -> Self {
+    pub(crate) fn new(path: PathBuf, plugin: Option<&str>) -> Self {
         Self {
             view: View::Order,
             schedule: "Update".into(),
-            plugin: Some("GamePlugin".into()),
+            plugin: plugin.map(str::to_owned),
             set: None,
             show_common: false,
             layout: Layout::load(path),
@@ -491,7 +491,7 @@ fn draw_node(
         if selected {
             Stroke::new(1.5, RUST)
         } else {
-            Stroke::new(1.0, BORDER)
+            Stroke::NONE
         },
         egui::StrokeKind::Inside,
     );
@@ -640,7 +640,10 @@ mod tests {
                 .any(|node| node.name.ends_with("::at_end"))
         }));
         let temp = tempfile::tempdir().unwrap();
-        let mut panel = FlowGraph::new(temp.path().join(".editor/graph_layout.ron"));
+        let mut panel = FlowGraph::new(
+            temp.path().join(".editor/graph_layout.ron"),
+            Some("GamePlugin"),
+        );
         let graph = panel.visible(model);
         assert!(
             graph

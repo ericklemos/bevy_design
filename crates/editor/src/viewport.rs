@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use bevy::{
     asset::RenderAssetUsages,
     camera::RenderTarget,
@@ -16,24 +18,106 @@ use crate::{EditorOnly, ui::Workspace};
 pub(crate) struct EditCamera;
 
 #[derive(Resource)]
-pub(crate) struct Viewport(pub(crate) Handle<Image>);
+pub(crate) struct Viewport {
+    pub(crate) image: Handle<Image>,
+    requested_size: Option<UVec2>,
+    pending_resize: Option<(UVec2, Duration)>,
+}
+
+const RESIZE_DELAY: Duration = Duration::from_millis(100);
 
 impl Viewport {
-    pub(crate) fn resize(&self, images: &mut Assets<Image>, size: egui::Vec2, scale: f32) {
-        let width = (size.x * scale).round().clamp(1.0, 4096.0) as u32;
-        let height = (size.y * scale).round().clamp(1.0, 4096.0) as u32;
-        let Some(image) = images.get(&self.0) else {
-            return;
+    pub(crate) fn request_size(&mut self, size: Option<egui::Vec2>, scale: f32) {
+        let pixels = |points: f32| (points * scale).round().clamp(1.0, 4096.0) as u32;
+        self.requested_size = size.map(|size| UVec2::new(pixels(size.x), pixels(size.y)));
+    }
+
+    fn resize(&mut self, images: &mut Assets<Image>, now: Duration) -> bool {
+        let Some(size) = self.requested_size else {
+            self.pending_resize = None;
+            return false;
         };
-        if image.width() != width || image.height() != height {
-            if let Some(mut image) = images.get_mut(&self.0) {
-                image.resize(Extent3d {
-                    width,
-                    height,
-                    depth_or_array_layers: 1,
-                });
+        let Some(image) = images.get(&self.image) else {
+            return false;
+        };
+        if image.size() == size {
+            self.pending_resize = None;
+            return false;
+        }
+        match self.pending_resize {
+            Some((pending, since)) if pending == size => {
+                if now.saturating_sub(since) < RESIZE_DELAY {
+                    return false;
+                }
+            }
+            _ => {
+                self.pending_resize = Some((size, now));
+                return false;
             }
         }
+        let Some(mut image) = images.get_mut(&self.image) else {
+            return false;
+        };
+        image.resize(Extent3d {
+            width: size.x,
+            height: size.y,
+            depth_or_array_layers: 1,
+        });
+        self.pending_resize = None;
+        true
+    }
+}
+
+pub(crate) fn resize_target(
+    mut viewport: ResMut<Viewport>,
+    mut images: ResMut<Assets<Image>>,
+    mut projection: Single<&mut Projection, With<EditCamera>>,
+    time: Res<Time<Real>>,
+) {
+    if viewport.resize(&mut images, time.elapsed()) {
+        // Bevy emits the image's asset event after the camera update. Refresh
+        // the projection now so rendering uses the new size in the same frame.
+        projection.set_changed();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resize_waits_for_the_panel_size_to_settle() {
+        let mut images = Assets::<Image>::default();
+        let image = images.add(Image::new_target_texture(
+            960,
+            540,
+            TextureFormat::Bgra8UnormSrgb,
+            None,
+        ));
+        let mut viewport = Viewport {
+            image: image.clone(),
+            requested_size: None,
+            pending_resize: None,
+        };
+
+        viewport.request_size(Some(egui::vec2(800.0, 480.0)), 1.25);
+        assert!(!viewport.resize(&mut images, Duration::ZERO));
+        viewport.request_size(Some(egui::vec2(801.0, 480.0)), 1.25);
+        assert!(!viewport.resize(&mut images, Duration::from_millis(90)));
+        assert!(!viewport.resize(&mut images, Duration::from_millis(189)));
+        assert_eq!(images.get(&image).unwrap().size(), UVec2::new(960, 540));
+
+        assert!(viewport.resize(&mut images, Duration::from_millis(190)));
+        assert_eq!(images.get(&image).unwrap().size(), UVec2::new(1001, 600));
+        assert!(!viewport.resize(&mut images, Duration::from_millis(300)));
+
+        viewport.request_size(Some(egui::vec2(800.0, 480.0)), 1.25);
+        assert!(!viewport.resize(&mut images, Duration::from_millis(310)));
+        viewport.request_size(None, 1.25);
+        assert!(!viewport.resize(&mut images, Duration::from_millis(400)));
+        viewport.request_size(Some(egui::vec2(800.0, 480.0)), 1.25);
+        assert!(!viewport.resize(&mut images, Duration::from_millis(500)));
+        assert!(viewport.resize(&mut images, Duration::from_millis(600)));
     }
 }
 
@@ -151,7 +235,11 @@ pub(crate) fn setup(
         EditCamera,
         EditorOnly,
     ));
-    commands.insert_resource(Viewport(image));
+    commands.insert_resource(Viewport {
+        image,
+        requested_size: None,
+        pending_resize: None,
+    });
     commands.insert_resource(camera);
 
     commands.spawn((

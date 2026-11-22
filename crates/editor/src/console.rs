@@ -230,7 +230,7 @@ impl View {
                         ui.label(theme::label("PARAMETERS").small());
                     });
                 });
-                ui.separator();
+                ui.add_space(6.0);
                 if entries.is_empty() {
                     ui.label(theme::label(if self.timeline {
                         "Nenhum evento de simulação."

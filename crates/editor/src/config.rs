@@ -95,13 +95,13 @@ impl ConfigEditor {
     pub(crate) fn draw(&mut self, ui: &mut egui::Ui) {
         ui.heading("PlayerConfig");
         ui.monospace(PlayerConfig::PATH);
-        ui.separator();
+        ui.add_space(8.0);
         if let Some(draft) = self.draft.as_mut() {
             if inspector::edit_reflected(ui, draft) {
                 self.due = Some(Instant::now() + DEBOUNCE);
                 self.error = None;
             }
-            ui.separator();
+            ui.add_space(8.0);
             if let Some(error) = &self.error {
                 ui.label(format!("Não foi possível salvar: {error}"));
                 if ui.button("Descartar rascunho").clicked() {
@@ -165,6 +165,7 @@ mod tests {
     use std::thread;
 
     use bevy::{asset::io::AssetSourceBuilder, world_serialization::WorldSerializationPlugin};
+    use engine_runtime::StartupScene;
     use game::{GamePlugin, Health};
 
     use super::*;
@@ -184,7 +185,7 @@ mod tests {
         .unwrap();
         fs::write(
             scenes.join("level.scn.ron"),
-            include_str!("../../../scenes/level.scn.ron"),
+            include_str!("../../../examples/demo/scenes/level.scn.ron"),
         )
         .unwrap();
         let mut app = App::new();
@@ -200,6 +201,7 @@ mod tests {
                 ..default()
             },
             WorldSerializationPlugin,
+            StartupScene("level.scn.ron".into()),
             GamePlugin,
         ))
         .insert_resource(ConfigEditor::new(path.clone()))

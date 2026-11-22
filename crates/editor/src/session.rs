@@ -38,11 +38,11 @@ pub(crate) struct Session {
 pub(crate) fn transition(world: &mut World, root: Entity, action: Action) {
     world.resource_scope(|world, mut session: Mut<Session>| {
         let result = match (&session.mode, action) {
-            (Mode::Edit, Action::Play) => capture(world, root).map(|snapshot| {
-                session.snapshot = Some(snapshot);
+            (Mode::Edit, Action::Play) => {
+                session.snapshot = Some(capture(world, root));
                 session.mode = Mode::Play;
-                "Simulação iniciada."
-            }),
+                Ok("Simulação iniciada.")
+            }
             (Mode::Pause, Action::Play) => {
                 session.mode = Mode::Play;
                 Ok("Simulação retomada.")
@@ -79,7 +79,7 @@ pub(crate) fn transition(world: &mut World, root: Entity, action: Action) {
     });
 }
 
-fn capture(world: &World, root: Entity) -> Result<Snapshot, String> {
+fn capture(world: &World, root: Entity) -> Snapshot {
     let mut links = Vec::new();
     let mut pending = vec![root];
     while let Some(parent) = pending.pop() {
@@ -94,9 +94,6 @@ fn capture(world: &World, root: Entity) -> Result<Snapshot, String> {
             pending.push(child);
         }
     }
-    if links.is_empty() {
-        return Err("a cena ainda não tem entidades para capturar".into());
-    }
     let registry = world.resource::<AppTypeRegistry>().read();
     let scene = DynamicWorldBuilder::from_world(world, &registry)
         .deny_all_resources()
@@ -105,7 +102,7 @@ fn capture(world: &World, root: Entity) -> Result<Snapshot, String> {
         .deny_component::<GlobalTransform>()
         .extract_entities(links.iter().map(|&(child, _)| child))
         .build();
-    Ok(Snapshot { scene, links })
+    Snapshot { scene, links }
 }
 
 fn restore(world: &mut World, old_root: Entity, snapshot: &Snapshot) -> Result<Entity, String> {
@@ -150,11 +147,68 @@ mod tests {
 
     use bevy::{
         asset::io::AssetSourceBuilder,
-        world_serialization::{DynamicWorldRoot, WorldSerializationPlugin},
+        world_serialization::{
+            DynamicWorldRoot, WorldInstance, WorldInstanceSpawner, WorldSerializationPlugin,
+        },
     };
+    use engine_runtime::StartupScene;
     use game::{GamePlugin, Health};
 
     use super::*;
+
+    #[test]
+    fn new_project_loads_an_empty_scene_and_can_play_and_stop() {
+        let parent = tempfile::tempdir().unwrap();
+        let project = projects::Project::create(&parent.path().join("vazio"), "Vazio").unwrap();
+        let mut app = App::new();
+        app.register_asset_source(
+            "scenes",
+            AssetSourceBuilder::platform_default(&project.scenes().to_string_lossy(), None),
+        )
+        .add_plugins((
+            MinimalPlugins,
+            AssetPlugin {
+                file_path: project.assets().to_string_lossy().into_owned(),
+                ..default()
+            },
+            WorldSerializationPlugin,
+            StartupScene(project.startup_scene().into()),
+        ))
+        .init_resource::<Session>()
+        .insert_resource(GameSimulation(false));
+        app.finish();
+        app.cleanup();
+
+        let mut roots = app
+            .world_mut()
+            .query_filtered::<(Entity, &WorldInstance), With<DynamicWorldRoot>>();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let root = loop {
+            app.update();
+            let world = app.world();
+            if let Ok((root, instance)) = roots.single(world)
+                && world
+                    .resource::<WorldInstanceSpawner>()
+                    .instance_is_ready(**instance)
+            {
+                break root;
+            }
+            assert!(Instant::now() < deadline, "starter scene did not load");
+            thread::sleep(Duration::from_millis(1));
+        };
+        let world = app.world_mut();
+        assert!(world.get::<Children>(root).is_none());
+        transition(world, root, Action::Play);
+        assert_eq!(world.resource::<Session>().mode, Mode::Play);
+        transition(world, root, Action::Stop);
+        let session = world.resource::<Session>();
+        assert_eq!(session.mode, Mode::Edit);
+        assert!(
+            world
+                .get::<Children>(session.restored_root.unwrap())
+                .is_none()
+        );
+    }
 
     #[test]
     fn stop_restores_reflected_state_and_hierarchy_after_pause_and_resume() {
@@ -201,7 +255,7 @@ mod tests {
 
     #[test]
     fn loaded_demo_can_play_and_restore_twice() {
-        let project = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let project = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/demo");
         let mut app = App::new();
         app.register_asset_source(
             "scenes",
@@ -215,6 +269,7 @@ mod tests {
                 ..default()
             },
             WorldSerializationPlugin,
+            StartupScene("level.scn.ron".into()),
         ))
         .insert_resource(GameSimulation(false))
         .init_resource::<Session>()

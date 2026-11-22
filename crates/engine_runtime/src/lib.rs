@@ -3,8 +3,27 @@ use std::{io, marker::PhantomData};
 use bevy::{
     asset::{AssetLoader, LoadContext, io::Reader},
     prelude::*,
+    world_serialization::DynamicWorldRoot,
 };
 use serde::de::DeserializeOwned;
+
+/// Loads the host's chosen initial scene independently of gameplay plugins.
+pub struct StartupScene(pub String);
+
+impl Plugin for StartupScene {
+    fn build(&self, app: &mut App) {
+        let path = format!("scenes://{}", self.0);
+        app.add_systems(
+            Startup,
+            move |mut commands: Commands, assets: Res<AssetServer>| {
+                commands.spawn((
+                    DynamicWorldRoot(assets.load(path.clone())),
+                    Transform::IDENTITY,
+                ));
+            },
+        );
+    }
+}
 
 /// Loads a typed RON asset through Bevy's AssetServer.
 #[derive(TypePath)]
