@@ -12,7 +12,7 @@ use std::collections::HashSet;
 use crate::{
     EditorOnly,
     config::ConfigEditor,
-    flow_graph::{FlowGraph, Model},
+    flow_graph::{FlowGraph, Model, View as GraphView},
     gizmo::{self, Gizmo},
     icons::{self, Icon},
     inspector::{Edit, Inspector},
@@ -56,7 +56,31 @@ impl Panel {
     }
 }
 
-fn default_dock() -> DockState<Panel> {
+/// Top-level workspace screens, in the spirit of Blender's workspaces.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum Screen {
+    #[default]
+    Building,
+    Scripting,
+}
+
+impl Screen {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Building => "Building",
+            Self::Scripting => "Scripting",
+        }
+    }
+
+    fn hint(self) -> &'static str {
+        match self {
+            Self::Building => "Construir a cena: hierarquia, viewport e inspetor.",
+            Self::Scripting => "Lógica e Flow Graph: sistemas, queries e observers.",
+        }
+    }
+}
+
+fn default_building_dock() -> DockState<Panel> {
     const LEFT: f32 = 0.20;
     const CENTER: f32 = 0.58;
     const TOP: f32 = 0.58;
@@ -65,10 +89,194 @@ fn default_dock() -> DockState<Panel> {
     // The fraction is the left child's share, even when the new tab is on that side.
     let [center, left] = tree.split_left(NodeIndex::root(), LEFT, vec![Panel::Hierarchy]);
     let [center, _] = tree.split_right(center, CENTER / (1.0 - LEFT), vec![Panel::Inspector]);
-    let [_, bottom] = tree.split_below(center, TOP, vec![Panel::Graph]);
-    tree.split_right(bottom, 0.57, vec![Panel::Console]);
+    // The Flow Graph belongs to the Scripting screen, so Building starts without it.
+    tree.split_below(center, TOP, vec![Panel::Console]);
     tree.split_below(left, TOP, vec![Panel::Assets]);
     dock
+}
+
+fn default_scripting_dock() -> DockState<Panel> {
+    const GRAPH: f32 = 0.78;
+    const MINIMIZED_CONSOLE: f32 = 0.88;
+    let mut dock = DockState::new(vec![Panel::Graph]);
+    let tree = dock.main_surface_mut();
+    // The graph replaces the viewport; the console is a collapsed strip at the bottom.
+    tree.split_right(NodeIndex::root(), GRAPH, vec![Panel::Inspector]);
+    tree.split_below(NodeIndex::root(), MINIMIZED_CONSOLE, vec![Panel::Console]);
+    dock
+}
+
+fn header(
+    ui: &mut Ui,
+    workspace: &mut Workspace,
+    session: &Session,
+    projects: &mut Picker,
+    commands: &mut Commands,
+) {
+    let rect = ui.max_rect();
+    let height = rect.height();
+    let third = rect.width() / 3.0;
+    let center_x = rect.left() + third;
+    let end_x = rect.left() + third * 2.0;
+    let mut screen = workspace.screen;
+
+    ui.scope_builder(
+        egui::UiBuilder::new()
+            .max_rect(egui::Rect::from_min_size(rect.min, vec2(third, height)))
+            .layout(egui::Layout::left_to_right(egui::Align::Center)),
+        |ui| {
+            egui::MenuBar::new().ui(ui, |ui| {
+                ui.menu_button("File", |ui| {
+                    if ui.button("Fechar editor").clicked() {
+                        ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
+                        commands.write_message(AppExit::Success);
+                    }
+                });
+                if ui.button("Procurar").clicked() {
+                    projects.choose(false);
+                }
+                ui.menu_button("Editors", |ui| {
+                    if ui.button("Restaurar layout inicial").clicked() {
+                        workspace.reset_layout();
+                        ui.close();
+                    }
+                });
+                ui.menu_button("Help", |ui| {
+                    ui.label("Viewport: arraste com o botão direito.");
+                    ui.label("WASD move; Q/E desce/sobe; roda aproxima.");
+                });
+            });
+        },
+    );
+
+    ui.scope_builder(
+        egui::UiBuilder::new()
+            .max_rect(egui::Rect::from_min_size(
+                egui::pos2(center_x, rect.top()),
+                vec2(third, height),
+            ))
+            .layout(egui::Layout::left_to_right(egui::Align::Center)),
+        |ui| screen_section(ui, third, &mut screen),
+    );
+
+    ui.scope_builder(
+        egui::UiBuilder::new()
+            .max_rect(egui::Rect::from_min_size(
+                egui::pos2(end_x, rect.top()),
+                vec2(rect.right() - end_x, height),
+            ))
+            .layout(egui::Layout::right_to_left(egui::Align::Center)),
+        |ui| session_status(ui, session),
+    );
+
+    if screen != workspace.screen {
+        workspace.set_screen(screen);
+    }
+
+    let painter = ui.painter();
+    for x in [center_x, end_x] {
+        painter.rect_filled(
+            egui::Rect::from_center_size(egui::pos2(x, rect.center().y), vec2(1.0, 14.0)),
+            0.5,
+            theme::BORDER,
+        );
+    }
+}
+
+const SCREEN_TAB_WIDTH: f32 = 96.0;
+const SCREEN_SWITCH_WIDTH: f32 = SCREEN_TAB_WIDTH * 2.0 + 1.0 + 6.0;
+
+fn screen_section(ui: &mut Ui, width: f32, screen: &mut Screen) {
+    ui.add_space(((width - SCREEN_SWITCH_WIDTH) * 0.5).max(0.0));
+    screen_switch(ui, screen);
+}
+
+fn screen_switch(ui: &mut Ui, screen: &mut Screen) {
+    egui::Frame::new()
+        .fill(theme::DEEP)
+        .corner_radius(theme::PILL_RADIUS)
+        .stroke(egui::Stroke::new(1.0, theme::BORDER))
+        .inner_margin(egui::Margin::symmetric(3, 2))
+        .show(ui, |ui| {
+            ui.spacing_mut().item_spacing.x = 1.0;
+            ui.horizontal(|ui| {
+                for option in [Screen::Building, Screen::Scripting] {
+                    if screen_tab(ui, option, *screen == option).clicked() {
+                        *screen = option;
+                    }
+                }
+            });
+        });
+}
+
+fn screen_tab(ui: &mut Ui, screen: Screen, selected: bool) -> egui::Response {
+    let (rect, response) =
+        ui.allocate_exact_size(vec2(SCREEN_TAB_WIDTH, 22.0), egui::Sense::click());
+    response.widget_info(|| {
+        egui::WidgetInfo::selected(
+            egui::WidgetType::SelectableLabel,
+            true,
+            selected,
+            screen.label(),
+        )
+    });
+    let radius = theme::PILL_RADIUS;
+    let fill = if selected {
+        SURFACE
+    } else if response.hovered() {
+        theme::HOVER
+    } else {
+        Color32::TRANSPARENT
+    };
+    ui.painter().rect_filled(rect, radius, fill);
+    if selected {
+        ui.painter().rect_stroke(
+            rect,
+            radius,
+            egui::Stroke::new(1.0, theme::RUST_SOFT),
+            egui::StrokeKind::Inside,
+        );
+    }
+    let color = if selected || response.hovered() {
+        TEXT
+    } else {
+        SECONDARY
+    };
+    ui.painter().circle_filled(
+        egui::pos2(rect.left() + 14.0, rect.center().y),
+        2.5,
+        if selected { RUST } else { theme::MUTED },
+    );
+    let galley = ui.painter().layout_no_wrap(
+        screen.label().to_owned(),
+        egui::FontId::proportional(12.0),
+        color,
+    );
+    ui.painter().galley(
+        egui::pos2(rect.left() + 24.0, rect.center().y - galley.size().y * 0.5),
+        galley,
+        color,
+    );
+    response.on_hover_text(screen.hint())
+}
+
+fn session_status(ui: &mut Ui, session: &Session) {
+    let (label, color) = match session.mode {
+        Mode::Edit => ("Edição", theme::SECONDARY),
+        Mode::Play => ("Simulação", RUST),
+        Mode::Pause => ("Pausada", theme::WARNING),
+    };
+    egui::Frame::new()
+        .fill(theme::ISLAND)
+        .corner_radius(theme::PILL_RADIUS)
+        .inner_margin(egui::Margin::symmetric(10, 3))
+        .show(ui, |ui| {
+            ui.horizontal(|ui| {
+                let (rect, _) = ui.allocate_exact_size(vec2(6.0, 6.0), egui::Sense::hover());
+                ui.painter().circle_filled(rect.center(), 3.0, color);
+                ui.label(egui::RichText::new(label).size(11.0).color(TEXT));
+            });
+        });
 }
 
 fn tool_is_active(dock: &DockState<Panel>, panel: Panel) -> bool {
@@ -157,8 +365,54 @@ fn tool_rail(
         });
 }
 
+fn view_rail(outer: &mut Ui, edge: egui::Panel, flow: &mut FlowGraph) {
+    edge.resizable(false)
+        .exact_size(theme::TOOL_RAIL)
+        .frame(
+            egui::Frame::new()
+                .fill(theme::CANVAS)
+                .inner_margin(egui::Margin::symmetric(4, 8)),
+        )
+        .show(outer, |ui| {
+            let rect = ui.max_rect();
+            let height = rail_group_count_height(GraphView::ALL.len());
+            let top = egui::Rect::from_min_size(rect.min, vec2(rect.width(), height));
+            ui.scope_builder(
+                egui::UiBuilder::new()
+                    .max_rect(top)
+                    .layout(egui::Layout::top_down(egui::Align::Center)),
+                |ui| {
+                    theme::island(egui::Margin::symmetric(4, 4)).show(ui, |ui| {
+                        ui.spacing_mut().item_spacing.y = 2.0;
+                        ui.vertical_centered(|ui| {
+                            for view in GraphView::ALL {
+                                let label = format!("{}\n{}", view.label(), view.hint());
+                                let active = flow.view() == view;
+                                if icons::sized_button(
+                                    ui,
+                                    vec2(32.0, 32.0),
+                                    view.icon(),
+                                    active,
+                                    &label,
+                                )
+                                .clicked()
+                                {
+                                    flow.set_view(view);
+                                }
+                            }
+                        });
+                    });
+                },
+            );
+        });
+}
+
 fn rail_group_height(panels: &[Panel]) -> f32 {
-    let count = panels.len() as f32;
+    rail_group_count_height(panels.len())
+}
+
+fn rail_group_count_height(count: usize) -> f32 {
+    let count = count as f32;
     (count * 32.0 + (count - 1.0).max(0.0) * 2.0 + 8.0).max(0.0)
 }
 
@@ -185,7 +439,7 @@ mod dock_tests {
 
     #[test]
     fn initial_dock_gives_hierarchy_the_narrow_left_column() {
-        let dock = default_dock();
+        let dock = default_building_dock();
         let tree = dock.main_surface();
         let root = NodeIndex::root();
         let Node::Horizontal(split) = &tree[root] else {
@@ -209,8 +463,8 @@ mod dock_tests {
     }
 
     #[test]
-    fn viewport_graph_and_console_have_separate_panes() {
-        let dock = default_dock();
+    fn building_layout_starts_without_the_flow_graph() {
+        let dock = default_building_dock();
         let tree = dock.main_surface();
         let center = NodeIndex::root().right().left();
         assert!(matches!(
@@ -218,18 +472,146 @@ mod dock_tests {
             Some([Panel::Viewport])
         ));
         assert!(matches!(
-            tree[center.right().left()].tabs(),
-            Some([Panel::Graph])
-        ));
-        assert!(matches!(
-            tree[center.right().right()].tabs(),
+            tree[center.right()].tabs(),
             Some([Panel::Console])
         ));
+        assert!(dock.find_tab(&Panel::Graph).is_none());
+    }
+
+    #[test]
+    fn scripting_screen_replaces_viewport_and_hides_building_tools() {
+        let mut workspace = Workspace::default();
+        assert_eq!(workspace.screen, Screen::Building);
+        assert!(workspace.dock().find_tab(&Panel::Graph).is_none());
+        assert!(workspace.dock().find_tab(&Panel::Viewport).is_some());
+
+        workspace.set_screen(Screen::Scripting);
+        let dock = workspace.dock();
+        assert!(dock.find_tab(&Panel::Graph).is_some());
+        assert!(tool_is_active(dock, Panel::Graph));
+        assert!(dock.find_tab(&Panel::Viewport).is_none());
+        assert!(dock.find_tab(&Panel::Hierarchy).is_none());
+        assert!(dock.find_tab(&Panel::Assets).is_none());
+        assert!(dock.find_tab(&Panel::Inspector).is_some());
+        assert!(dock.find_tab(&Panel::Console).is_some());
+
+        workspace.set_screen(Screen::Building);
+        assert!(workspace.dock().find_tab(&Panel::Graph).is_none());
+        assert!(workspace.dock().find_tab(&Panel::Viewport).is_some());
+        assert!(workspace.dock().find_tab(&Panel::Console).is_some());
+    }
+
+    #[test]
+    fn restoring_the_layout_restores_both_screens() {
+        let mut workspace = Workspace::default();
+        workspace.set_screen(Screen::Scripting);
+        workspace.reset_layout();
+        assert!(workspace.dock().find_tab(&Panel::Graph).is_some());
+        assert!(workspace.dock().find_tab(&Panel::Viewport).is_none());
+        workspace.set_screen(Screen::Building);
+        assert!(workspace.dock().find_tab(&Panel::Viewport).is_some());
+        assert!(workspace.dock().find_tab(&Panel::Graph).is_none());
+    }
+
+    #[test]
+    fn header_only_switches_modes_from_the_center_section() {
+        fn pass(
+            ctx: &egui::Context,
+            screen: egui::Rect,
+            workspace: &mut Workspace,
+            session: &Session,
+            projects: &mut Picker,
+            commands: &mut Commands,
+            events: Vec<egui::Event>,
+        ) {
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(screen),
+                    events,
+                    ..Default::default()
+                },
+                |ui| header(ui, workspace, session, projects, commands),
+            );
+            output.textures_delta.clear();
+        }
+
+        fn send_click(
+            ctx: &egui::Context,
+            screen: egui::Rect,
+            workspace: &mut Workspace,
+            session: &Session,
+            projects: &mut Picker,
+            commands: &mut Commands,
+            x: f32,
+        ) {
+            let pos = egui::pos2(x, 16.0);
+            pass(
+                ctx,
+                screen,
+                workspace,
+                session,
+                projects,
+                commands,
+                vec![egui::Event::PointerMoved(pos)],
+            );
+            for pressed in [true, false] {
+                pass(
+                    ctx,
+                    screen,
+                    workspace,
+                    session,
+                    projects,
+                    commands,
+                    vec![egui::Event::PointerButton {
+                        pos,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: egui::Modifiers::NONE,
+                    }],
+                );
+            }
+        }
+
+        let ctx = egui::Context::default();
+        icons::add_font(&ctx);
+        theme::install(&ctx);
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, vec2(900.0, 32.0));
+        let mut world = World::new();
+        let mut commands = world.commands();
+        let mut workspace = Workspace::default();
+        let session = Session::default();
+        let mut projects = Picker::default();
+        let mut click = |workspace: &mut Workspace, x| {
+            send_click(
+                &ctx,
+                screen,
+                workspace,
+                &session,
+                &mut projects,
+                &mut commands,
+                x,
+            );
+        };
+
+        click(&mut workspace, 250.0);
+        assert_eq!(workspace.screen, Screen::Building);
+        click(&mut workspace, 750.0);
+        assert_eq!(workspace.screen, Screen::Building);
+
+        click(&mut workspace, 498.0);
+        assert_eq!(workspace.screen, Screen::Scripting);
+        assert!(workspace.dock().find_tab(&Panel::Graph).is_some());
+        assert!(workspace.dock().find_tab(&Panel::Viewport).is_none());
+
+        click(&mut workspace, 401.0);
+        assert_eq!(workspace.screen, Screen::Building);
+        assert!(workspace.dock().find_tab(&Panel::Graph).is_none());
+        assert!(workspace.dock().find_tab(&Panel::Viewport).is_some());
     }
 
     #[test]
     fn sidebar_reopens_tools_without_replacing_the_remaining_layout() {
-        let mut dock = default_dock();
+        let mut dock = default_building_dock();
         toggle_tool(&mut dock, Panel::Hierarchy);
         assert!(dock.find_tab(&Panel::Hierarchy).is_none());
         assert!(tool_is_active(&dock, Panel::Assets));
@@ -256,11 +638,53 @@ mod dock_tests {
     }
 
     #[test]
+    fn scripting_view_rail_switches_the_graph_view() {
+        let ctx = egui::Context::default();
+        icons::add_font(&ctx);
+        theme::install(&ctx);
+        let temp = tempfile::tempdir().unwrap();
+        let mut flow = FlowGraph::new(temp.path().join("layout.ron"), None);
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, vec2(640.0, 480.0));
+        let pass = |flow: &mut FlowGraph, events| {
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(screen),
+                    events,
+                    ..Default::default()
+                },
+                |ui| view_rail(ui, egui::Panel::left("test_views"), flow),
+            );
+            output.textures_delta.clear();
+        };
+        let click = |flow: &mut FlowGraph, y: f32| {
+            let pos = egui::pos2(24.0, y);
+            pass(flow, vec![egui::Event::PointerMoved(pos)]);
+            for pressed in [true, false] {
+                pass(
+                    flow,
+                    vec![egui::Event::PointerButton {
+                        pos,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: egui::Modifiers::NONE,
+                    }],
+                );
+            }
+        };
+        click(&mut flow, 62.0);
+        assert_eq!(flow.view(), GraphView::Access);
+        click(&mut flow, 96.0);
+        assert_eq!(flow.view(), GraphView::Observers);
+        click(&mut flow, 28.0);
+        assert_eq!(flow.view(), GraphView::Order);
+    }
+
+    #[test]
     fn rail_buttons_are_usable_at_both_ends() {
         let ctx = egui::Context::default();
         icons::add_font(&ctx);
         theme::install(&ctx);
-        let mut dock = default_dock();
+        let mut dock = default_building_dock();
         let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, vec2(640.0, 480.0));
         let pass = |dock: &mut DockState<Panel>, events| {
             let mut output = ctx.run_ui(
@@ -297,14 +721,16 @@ mod dock_tests {
             }
         }
         assert!(dock.find_tab(&Panel::Inspector).is_none());
-        assert!(dock.find_tab(&Panel::Graph).is_none());
         assert!(dock.find_tab(&Panel::Console).is_none());
+        assert!(dock.find_tab(&Panel::Graph).is_some());
     }
 }
 
 #[derive(Resource)]
 pub(crate) struct Workspace {
-    dock: DockState<Panel>,
+    building: DockState<Panel>,
+    scripting: DockState<Panel>,
+    screen: Screen,
     pub(crate) selected: Option<Entity>,
     config_selected: bool,
     search: String,
@@ -328,7 +754,9 @@ struct Hierarchy {
 impl Default for Workspace {
     fn default() -> Self {
         Self {
-            dock: default_dock(),
+            building: default_building_dock(),
+            scripting: default_scripting_dock(),
+            screen: Screen::default(),
             selected: None,
             config_selected: false,
             search: String::new(),
@@ -345,6 +773,30 @@ impl Default for Workspace {
 impl Workspace {
     pub(crate) fn preview_visible(&self, entity: Entity) -> bool {
         !self.hierarchy.hidden.contains(&entity)
+    }
+
+    #[cfg(test)]
+    fn dock(&self) -> &DockState<Panel> {
+        match self.screen {
+            Screen::Building => &self.building,
+            Screen::Scripting => &self.scripting,
+        }
+    }
+
+    fn dock_mut(&mut self) -> &mut DockState<Panel> {
+        match self.screen {
+            Screen::Building => &mut self.building,
+            Screen::Scripting => &mut self.scripting,
+        }
+    }
+
+    fn set_screen(&mut self, screen: Screen) {
+        self.screen = screen;
+    }
+
+    fn reset_layout(&mut self) {
+        self.building = default_building_dock();
+        self.scripting = default_scripting_dock();
     }
 }
 
@@ -480,27 +932,7 @@ pub(crate) fn draw(
                 .inner_margin(egui::Margin::symmetric(10, 2)),
         )
         .show(&mut outer, |ui| {
-            egui::MenuBar::new().ui(ui, |ui| {
-                ui.menu_button("File", |ui| {
-                    if ui.button("Fechar editor").clicked() {
-                        ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
-                        commands.write_message(AppExit::Success);
-                    }
-                });
-                if ui.button("Procurar").clicked() {
-                    projects.choose(false);
-                }
-                ui.menu_button("Editors", |ui| {
-                    if ui.button("Restaurar layout inicial").clicked() {
-                        workspace.dock = default_dock();
-                        ui.close();
-                    }
-                });
-                ui.menu_button("Help", |ui| {
-                    ui.label("Viewport: arraste com o botão direito.");
-                    ui.label("WASD move; Q/E desce/sobe; roda aproxima.");
-                });
-            });
+            header(ui, &mut workspace, &session, &mut projects, &mut commands);
         });
     egui::Panel::bottom("status")
         .resizable(false)
@@ -519,23 +951,43 @@ pub(crate) fn draw(
                     ui.set_min_size(vec2(ui.available_width(), 16.0));
                 });
         });
-    tool_rail(
-        &mut outer,
-        egui::Panel::left("left_tools"),
-        &mut workspace.dock,
-        &[Panel::Hierarchy],
-        &[Panel::Assets],
-    );
-    tool_rail(
-        &mut outer,
-        egui::Panel::right("right_tools"),
-        &mut workspace.dock,
-        &[Panel::Inspector],
-        &[Panel::Graph, Panel::Console],
-    );
+    let screen = workspace.screen;
+    match screen {
+        Screen::Building => {
+            tool_rail(
+                &mut outer,
+                egui::Panel::left("building_left_tools"),
+                workspace.dock_mut(),
+                &[Panel::Hierarchy],
+                &[Panel::Assets],
+            );
+            tool_rail(
+                &mut outer,
+                egui::Panel::right("building_right_tools"),
+                workspace.dock_mut(),
+                &[Panel::Inspector],
+                &[Panel::Console],
+            );
+        }
+        Screen::Scripting => {
+            view_rail(
+                &mut outer,
+                egui::Panel::left("scripting_views"),
+                &mut tools.flow_graph,
+            );
+            tool_rail(
+                &mut outer,
+                egui::Panel::right("scripting_right_tools"),
+                workspace.dock_mut(),
+                &[Panel::Inspector],
+                &[Panel::Graph, Panel::Console],
+            );
+        }
+    }
 
     let Workspace {
-        dock,
+        building,
+        scripting,
         selected,
         search,
         config_selected,
@@ -545,7 +997,12 @@ pub(crate) fn draw(
         console,
         initialized_selection,
         grid_visible,
+        ..
     } = &mut *workspace;
+    let dock = match screen {
+        Screen::Building => building,
+        Screen::Scripting => scripting,
+    };
     if selected.is_some_and(|entity| rows.iter().all(|row| row.find(entity).is_none())) {
         *selected = None;
     }
@@ -564,6 +1021,7 @@ pub(crate) fn draw(
     }
     let target = selected_target(*selected, &tools.transforms, &tools.globals);
     let mut viewer = Viewer {
+        screen,
         session: &session,
         rows: &rows,
         selected,
@@ -663,6 +1121,7 @@ fn selected_target(
 }
 
 struct Viewer<'a> {
+    screen: Screen,
     session: &'a Session,
     rows: &'a [Row],
     selected: &'a mut Option<Entity>,
@@ -812,7 +1271,9 @@ impl Viewer<'_> {
             Panel::Viewport => unreachable!(),
             Panel::Graph => self.flow_graph.draw(ui, self.flow_model),
             Panel::Inspector => {
-                if *self.config_selected
+                if self.screen == Screen::Scripting {
+                    self.flow_graph.draw_inspector(ui, self.flow_model);
+                } else if *self.config_selected
                     && let Some(config) = self.config.as_deref_mut()
                 {
                     config.draw(ui);

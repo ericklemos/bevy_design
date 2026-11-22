@@ -11,7 +11,9 @@ use bevy::{
     app::{AppLabel, SubApp},
     prelude::*,
 };
-use bevy_egui::egui::{self, Align2, Color32, FontId, Pos2, Rect, Sense, Stroke, Vec2, pos2, vec2};
+use bevy_egui::egui::{
+    self, Align2, Color32, FontId, Pos2, Rect, RichText, Sense, Stroke, Vec2, pos2, vec2,
+};
 
 use layout::Layout;
 use model::{Edge, EdgeKind, Graph, Node, NodeKind};
@@ -27,11 +29,39 @@ const WRITE: Color32 = Color32::from_rgb(196, 149, 224);
 const LISTEN: Color32 = Color32::from_rgb(99, 199, 177);
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-enum View {
+pub(crate) enum View {
     #[default]
     Order,
     Access,
     Observers,
+}
+
+impl View {
+    pub(crate) const ALL: [Self; 3] = [Self::Order, Self::Access, Self::Observers];
+
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Order => "Schedule",
+            Self::Access => "Queries",
+            Self::Observers => "Observers",
+        }
+    }
+
+    pub(crate) fn hint(self) -> &'static str {
+        match self {
+            Self::Order => "Ordem de execução dos sistemas no schedule.",
+            Self::Access => "Leituras e escritas de componentes por sistema.",
+            Self::Observers => "Eventos observados e seus observers.",
+        }
+    }
+
+    pub(crate) fn icon(self) -> Icon {
+        match self {
+            Self::Order => Icon::Clock,
+            Self::Access => Icon::Filter,
+            Self::Observers => Icon::Eye,
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -75,26 +105,35 @@ impl FlowGraph {
         }
     }
 
+    pub(crate) fn view(&self) -> View {
+        self.view
+    }
+
+    pub(crate) fn set_view(&mut self, view: View) {
+        if self.view == view {
+            return;
+        }
+        self.view = view;
+        self.selected = None;
+        self.camera = Camera::default();
+    }
+
     pub(crate) fn draw(&mut self, ui: &mut egui::Ui, model: &Model) {
-        ui.horizontal_wrapped(|ui| {
-            let previous = self.view;
-            ui.selectable_value(&mut self.view, View::Order, "Agendador");
-            ui.selectable_value(&mut self.view, View::Access, "Queries");
-            ui.selectable_value(&mut self.view, View::Observers, "Observers");
-            if self.view != previous {
-                self.camera = Camera::default();
-            }
-            let more = icons::button(ui, Icon::More, false, "Ações do grafo");
-            egui::Popup::menu(&more).show(|ui| {
-                if ui.button("Recentralizar").clicked() {
-                    self.camera = Camera::default();
-                    ui.close();
-                }
-                if ui.button("Resetar nós").clicked() {
-                    self.layout.reset(&self.prefix());
-                    self.camera = Camera::default();
-                    ui.close();
-                }
+        ui.horizontal(|ui| {
+            ui.label(theme::section(self.view.label()));
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let more = icons::button(ui, Icon::More, false, "Ações do grafo");
+                egui::Popup::menu(&more).show(|ui| {
+                    if ui.button("Recentralizar").clicked() {
+                        self.camera = Camera::default();
+                        ui.close();
+                    }
+                    if ui.button("Resetar nós").clicked() {
+                        self.layout.reset(&self.prefix());
+                        self.camera = Camera::default();
+                        ui.close();
+                    }
+                });
             });
         });
         self.filters(ui, model);
@@ -122,6 +161,80 @@ impl FlowGraph {
         if !ui.input(|input| input.pointer.any_down()) {
             self.layout.save_if_dirty();
         }
+    }
+
+    pub(crate) fn draw_inspector(&self, ui: &mut egui::Ui, model: &Model) {
+        let Some(node) = self.selected_node(model) else {
+            ui.label(theme::label("Selecione um nó no Flow Graph."));
+            return;
+        };
+        ui.heading(short_name(&node.name));
+        ui.label(RichText::new(node.kind.label()).color(SECONDARY));
+        ui.add_space(8.0);
+        ui.label(theme::section("ORIGEM"));
+        ui.label(if node.origin.is_empty() {
+            "—"
+        } else {
+            node.origin
+        });
+        ui.add_space(6.0);
+        ui.label(theme::section("NOME COMPLETO"));
+        ui.add(egui::Label::new(RichText::new(&node.name).monospace()).wrap());
+        if !node.info.is_empty() {
+            ui.add_space(6.0);
+            ui.label(theme::section("DETALHES"));
+            ui.label(&node.info);
+        }
+        let accesses: Vec<_> = node
+            .access
+            .iter()
+            .filter(|access| self.show_common || !access.hidden_by_default())
+            .collect();
+        if !accesses.is_empty() || node.kind == NodeKind::System {
+            ui.add_space(8.0);
+            ui.label(theme::section("ACESSOS"));
+            if accesses.is_empty() {
+                ui.label(theme::label("Nenhum acesso registrado."));
+            }
+            for access in accesses {
+                ui.horizontal(|ui| {
+                    let color = match access.mark() {
+                        "R" => READ,
+                        "W" => WRITE,
+                        _ => MEMBERSHIP,
+                    };
+                    ui.label(RichText::new(access.mark()).monospace().color(color));
+                    ui.add(
+                        egui::Label::new(RichText::new(&access.path).monospace())
+                            .truncate()
+                            .sense(egui::Sense::hover()),
+                    )
+                    .on_hover_text(&access.path);
+                });
+            }
+        }
+    }
+
+    fn selected_node(&self, model: &Model) -> Option<Node> {
+        let id = self.selected.as_deref()?.strip_prefix(&self.prefix())?;
+        if self.view == View::Access
+            && let Some(path) = id.strip_prefix("data::")
+        {
+            return Some(Node {
+                id: id.to_owned(),
+                name: path.to_owned(),
+                kind: NodeKind::Data,
+                origin: "",
+                info: "Tipo ECS acessado por um ou mais sistemas.".into(),
+                access: Vec::new(),
+            });
+        }
+        let graph = if self.view == View::Observers {
+            &model.observers
+        } else {
+            model.schedules.get(&self.schedule)?
+        };
+        graph.nodes.iter().find(|node| node.id == id).cloned()
     }
 
     fn filters(&mut self, ui: &mut egui::Ui, model: &Model) {
@@ -676,8 +789,15 @@ mod tests {
         let positions = default_positions(&graph, View::Order);
         assert!(positions[write].x < positions[read].x);
         panel.set = Some(graph.nodes[parent].id.clone());
+        panel.selected = Some(format!("{}{}", panel.prefix(), graph.nodes[write].id));
+        assert!(
+            panel
+                .selected_node(model)
+                .is_some_and(|node| node.name.ends_with("::write_meter"))
+        );
 
-        panel.view = View::Access;
+        panel.set_view(View::Access);
+        assert!(panel.selected_node(model).is_none());
         let queries = panel.visible(model);
         assert!(
             queries
@@ -698,6 +818,15 @@ mod tests {
                 .any(|edge| edge.kind == EdgeKind::Write)
         );
         assert!(queries.edges.iter().any(|edge| edge.kind == EdgeKind::Read));
+        let data = queries
+            .nodes
+            .iter()
+            .find(|node| node.kind == NodeKind::Data)
+            .unwrap();
+        panel.selected = Some(format!("{}{}", panel.prefix(), data.id));
+        let selected = panel.selected_node(model).unwrap();
+        assert_eq!(selected.kind, NodeKind::Data);
+        assert_eq!(selected.name, data.name);
         panel.show_common = true;
         assert!(
             panel
@@ -707,7 +836,7 @@ mod tests {
                 .any(|node| node.kind == NodeKind::Data && node.name.ends_with("::Transform"))
         );
 
-        panel.view = View::Observers;
+        panel.set_view(View::Observers);
         let observers = panel.visible(model);
         assert_eq!(observers.edges.len(), 1);
         let edge = observers.edges[0];

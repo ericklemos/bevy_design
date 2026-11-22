@@ -66,14 +66,23 @@ Comandos sem caminho usam a pasta atual se ela tiver um manifesto;
 
 Os painéis podem ser movidos, redimensionados e reacoplados pelas abas.
 Em `Editors → Restaurar layout inicial` é possível voltar à disposição padrão.
-As barras laterais agrupam atalhos de ferramentas no topo e no rodapé. Clique
-num ícone para abrir a ferramenta ou ativar a sua aba; clique de novo para
-ocultá-la. A barra de status inferior está reservada para informações futuras.
-O tema Warm Charcoal usa cards flutuantes: os painéis são ilhas arredondadas
-separadas por respiros, com sombra leve em vez de linhas divisórias. As abas
-ativas aparecem como pílulas. O layout tem três colunas: Hierarchy e Asset
-Browser à esquerda, Viewport sobre Flow Graph e Console no centro, e Inspector
-à direita.
+O topo é dividido em três zonas, como no Blender: à esquerda ficam os menus
+normais (`File`, `Procurar`, `Editors`, `Help`); no centro, os modos
+**Building** e **Scripting**; à direita, o estado atual de edição ou simulação.
+Building é o espaço de construção da cena; Scripting é o espaço de lógica, e o
+Flow Graph só pode ser aberto nele. As barras laterais agrupam atalhos de
+ferramentas no topo e no rodapé. Clique num ícone para abrir a ferramenta ou
+ativar a sua aba; clique de novo para ocultá-la. A barra de status inferior está
+reservada para informações futuras. O tema Warm Charcoal usa cards flutuantes:
+os painéis são ilhas arredondadas separadas por respiros, com sombra leve em vez
+de linhas divisórias. As abas ativas aparecem como pílulas.
+
+O layout de Building tem três colunas: Hierarchy e Asset Browser à esquerda,
+Viewport sobre Console no centro, e Inspector à direita. Ao entrar em Scripting,
+os ícones de Hierarchy e Asset Browser dão lugar a **Schedule**, **Queries** e
+**Observers**, que escolhem a vista do grafo. O Flow Graph ocupa o lugar da
+Viewport, o Inspector passa a mostrar os detalhes do nó selecionado e o Console
+é minimizado em uma faixa na parte inferior.
 O pacote oficial de ícones do editor é o **Material Symbols Outlined**, do Google.
 A fonte é embutida no binário e funciona offline. Para adicionar um ícone, siga
 as [instruções do pacote](crates/editor/assets/material-symbols/README.md).
@@ -116,14 +125,16 @@ de simulação, não um perfil de desempenho.
 
 ## Grafo de fluxos — Fase 4
 
-O **Flow Graph** fica abaixo da **Viewport**. Na demo, o grafo abre em
-`Update` com o filtro `GamePlugin`. Troque o
-schedule e filtre por plugin ou `SystemSet`. Use a roda para dar zoom, arraste
-o fundo com o botão direito ou do meio para navegar e arraste os nós com o
-botão esquerdo. As posições são salvas exclusivamente em
+O **Flow Graph** pertence ao modo **Scripting**, onde ocupa o lugar da Viewport;
+ele não aparece no modo Building. Na demo, o grafo abre em `Update` com o filtro
+`GamePlugin`. Escolha a vista pelos ícones **Schedule**, **Queries** e
+**Observers** na barra esquerda e filtre por plugin ou `SystemSet`. Use a roda
+para dar zoom, arraste o fundo com o botão direito ou do meio para navegar e
+arraste os nós com o botão esquerdo. As posições são salvas exclusivamente em
 `.editor/graph_layout.ron`; **⋮ → Resetar nós** limpa a disposição da vista atual.
+Selecionar um nó mostra seus acessos e origem no Inspector.
 
-- **Agendador:** a linha laranja indica ordem declarada no `ScheduleGraph`;
+- **Schedule:** a linha laranja indica ordem declarada no `ScheduleGraph`;
   a cinza indica pertencimento a um conjunto.
 - **Queries:** azul indica leitura e roxo indica escrita. Esses acessos não
   garantem ordem nem provam fluxo de dados. Leituras comuns de `Transform`,
